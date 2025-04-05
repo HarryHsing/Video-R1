@@ -15,9 +15,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node="4" \
     --master_port="12365" \
     src/open_r1/grpo.py \
     --output_dir "./log/Qwen2.5-VL-7B-GRPO" \
-    --model_name_or_path 'SFT Model Path' \
-    --dataset_name "./Video-R1-data/Video-R1-260k.json" \
-    --deepspeed local_scripts/zero3.json \
+    --model_name_or_path "./log/Qwen2.5-VL-7B-Video-7B-cot-sft/checkpoint-800" \
+    --dataset_name "/research/d1/gds/zhxing/projects_r1/datasets/Video-R1-data/Video-R1-260k.json" \
+    --deepspeed local_scripts/zero3_offload.json \
     --max_prompt_length 16384 \
     --max_completion_length 768 \
     --per_device_train_batch_size 1 \
