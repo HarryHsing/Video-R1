@@ -83,11 +83,8 @@ def download_video(url: str, folder: str = '/tmp/videos/') -> str:
 
 def prepare_dataset(example: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     """Prepare dataset example for training."""
-
     
-
     system_message = "You are a helpful assistant"
-    
     
     QUESTION_TEMPLATE = (
         "{Question}\n"
@@ -104,8 +101,6 @@ def prepare_dataset(example: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
         "free-form": " Please provide your text answer within the <answer> </answer> tags.",
         "regression": " Please provide the numerical value (e.g., 42 or 3.14) within the <answer> </answer> tags."
     }
-
-
     
     if example["problem_type"] == 'multiple choice':
         question = example['problem'] + "Options:\n"
@@ -114,7 +109,10 @@ def prepare_dataset(example: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     else:
         question = example['problem']
 
-
+    # 修改文件路径构建部分 - 使用绝对路径
+    data_root = "/research/d1/gds/zhxing/projects_r1/datasets/Video-R1-data"
+    file_path = os.path.join(data_root, example['path'].lstrip('/'))
+    
     messages = [
         {
             "role": "system",
@@ -125,7 +123,7 @@ def prepare_dataset(example: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
             "content": [
                 {
                     "type": example['data_type'],
-                    example['data_type']: os.getcwd() + "/Video-R1-data" + example['path'][1:]
+                    example['data_type']: file_path
                     # "max_pixels": 360*420,
                     # "fps": 1.0
                 },
@@ -141,7 +139,6 @@ def prepare_dataset(example: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
         }
     ]
     
-
     return {"messages": messages}
 
 def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -212,16 +209,36 @@ if __name__ == "__main__":
     #     bnb_4bit_quant_type="nf4",
     #     bnb_4bit_compute_dtype=torch.bfloat16
     # )
+    
+    import sys
+
+    # 检查是否使用 DeepSpeed Zero-3
+    using_deepspeed_zero3 = False
+    if hasattr(training_args, "deepspeed") and training_args.deepspeed:
+        # 检查配置文件路径中是否包含 zero3
+        if "zero3" in training_args.deepspeed:
+            using_deepspeed_zero3 = True
+        # 或者尝试读取配置文件检查
+        elif os.path.exists(training_args.deepspeed):
+            try:
+                with open(training_args.deepspeed, 'r') as f:
+                    ds_config = json.load(f)
+                    if ds_config.get("zero_optimization", {}).get("stage", 0) == 3:
+                        using_deepspeed_zero3 = True
+            except:
+                pass
 
     # Model initialization
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
         torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map(),
-        # quantization_config=bnb_config,
+        # quantization_config=bnb_config
     )
-    
+
+    # 只有在不使用 DeepSpeed Zero-3 时才添加 device_map
+    if not using_deepspeed_zero3:
+        model_kwargs["device_map"] = get_kbit_device_map()
     
     if "Qwen2-VL" in model_config.model_name_or_path:
         model = Qwen2VLForConditionalGeneration.from_pretrained(model_config.model_name_or_path, **model_kwargs)

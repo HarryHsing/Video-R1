@@ -21,7 +21,7 @@ from typing import Optional
 from datasets import load_dataset, load_from_disk
 from transformers import Qwen2VLForConditionalGeneration
 
-from trainer import Qwen2VLGRPOTrainer, Qwen2VLGRPOVLLMTrainerModified
+from trainer import Qwen2VLGRPOTrainer, Qwen2VLGRPOVLLMTrainerModified, Qwen2_5OmniGRPOTrainer
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 
 from datasets import Dataset, DatasetDict
@@ -60,7 +60,14 @@ class GRPOScriptArguments(ScriptArguments):
         default=True,
         metadata={"help": "whether using length reward"},
     )
-
+    use_audio_in_video: Optional[bool] = field(
+        default=True,
+        metadata={"help": "whether to use audio in video"},
+    )
+    enable_audio_output: Optional[bool] = field(
+        default=False,
+        metadata={"help": "whether to enable audio output generation"},
+    )
 
 
 def accuracy_reward(completions, solution, **kwargs):
@@ -109,6 +116,7 @@ def accuracy_reward(completions, solution, **kwargs):
     question_type = kwargs['problem_type'][0]
     
     contents = [completion[0]["content"] for completion in completions]
+    print(contents[:2])
     current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
     rewards = []
 
@@ -283,22 +291,44 @@ def main(script_args, training_args, model_args):
     dataset = dataset.map(make_conversation_image_and_video)
 
     
-    trainer_cls = Qwen2VLGRPOTrainer if not training_args.use_vllm else Qwen2VLGRPOVLLMTrainerModified
+    # 根据模型类型选择 trainer
+    if "Qwen2.5-Omni" in model_args.model_name_or_path:
+        trainer_cls = Qwen2_5OmniGRPOTrainer if not training_args.use_vllm else Qwen2VLGRPOVLLMTrainerModified
+    else:
+        trainer_cls = Qwen2VLGRPOTrainer if not training_args.use_vllm else Qwen2VLGRPOVLLMTrainerModified
+    
     print("using: ", trainer_cls)
 
-    # Initialize the GRPO trainer
-    trainer = trainer_cls(
-        model=model_args.model_name_or_path,
-        reward_funcs=reward_funcs,
-        args=training_args,
-        script_args=script_args,
-        train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        peft_config=get_peft_config(model_args),
-        attn_implementation=model_args.attn_implementation,
-        max_pixels=script_args.max_pixels,
-        min_pixels=script_args.min_pixels,
-    )
+    # 初始化 GRPO trainer
+    if "Qwen2.5-Omni" in model_args.model_name_or_path:
+        trainer = trainer_cls(
+            model=model_args.model_name_or_path,
+            reward_funcs=reward_funcs,
+            args=training_args,
+            script_args=script_args,
+            train_dataset=dataset[script_args.dataset_train_split],
+            eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+            peft_config=get_peft_config(model_args),
+            attn_implementation=model_args.attn_implementation,
+            max_pixels=script_args.max_pixels,
+            min_pixels=script_args.min_pixels,
+            use_audio_in_video=script_args.use_audio_in_video,
+            enable_audio_output=script_args.enable_audio_output,
+            is_omni_model = True,
+        )
+    else:
+        trainer = trainer_cls(
+            model=model_args.model_name_or_path,
+            reward_funcs=reward_funcs,
+            args=training_args,
+            script_args=script_args,
+            train_dataset=dataset[script_args.dataset_train_split],
+            eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+            peft_config=get_peft_config(model_args),
+            attn_implementation=model_args.attn_implementation,
+            max_pixels=script_args.max_pixels,
+            min_pixels=script_args.min_pixels,
+        )
     
     if training_args.resume_from_checkpoint is not None:
         checkpoint = training_args.resume_from_checkpoint

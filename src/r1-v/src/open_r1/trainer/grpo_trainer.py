@@ -35,6 +35,8 @@ from transformers import (
     PreTrainedTokenizerBase,
     Qwen2VLForConditionalGeneration,
     Qwen2_5_VLForConditionalGeneration,
+    # Qwen2_5OmniModel,  # 添加 Omni 模型
+    # Qwen2_5OmniProcessor,  # 添加 Omni 处理器
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -48,6 +50,7 @@ from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url
 
 from qwen_vl_utils import process_vision_info
+from qwen_omni_utils import process_mm_info  # 添加 Omni 的多模态处理工具
 
 import copy
 
@@ -165,6 +168,7 @@ class Qwen2VLGRPOTrainer(Trainer):
         min_pixels: Optional[int] = 3136,
         attn_implementation: str = "flash_attention_2",
     ):
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -197,12 +201,14 @@ class Qwen2VLGRPOTrainer(Trainer):
                 model = Qwen2VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
             elif "Qwen2.5-VL" in model_id:
                 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+            elif "Qwen2.5-Omni" in model_id:  # 添加 Omni 模型支持
+                model_init_kwargs.pop("use_cache") 
+                model = Qwen2_5OmniModel.from_pretrained(model, **model_init_kwargs, enable_audio_output=self.enable_audio_output)
             elif "Aria" in model_id:
                 model_init_kwargs.pop("use_cache")
                 model = AriaForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
             else:
                 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-                # model = Qwen2VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
@@ -221,11 +227,12 @@ class Qwen2VLGRPOTrainer(Trainer):
                 self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
             elif "Qwen2.5-VL" in model_id:
                 self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
+            elif "Qwen2.5-Omni" in model_id:  # 添加 Omni 参考模型
+                self.ref_model = Qwen2_5OmniModel.from_pretrained(model_id, **model_init_kwargs, enable_audio_output=self.enable_audio_output)
             elif "Aria" in model_id:
                 self.ref_model = AriaForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
             else:
                 self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
-                # self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
         elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
@@ -236,12 +243,21 @@ class Qwen2VLGRPOTrainer(Trainer):
 
         # Processing class
         if processing_class is None:
-            if "Qwen2-VL" in model_id or "Qwen2.5-VL" in model_id or "Aria" in model_id or True:
+            if "Qwen2-VL" in model_id or "Qwen2.5-VL" in model_id or "Aria" in model_id:
                 processing_class = AutoProcessor.from_pretrained(model_id)
                 pad_token_id = processing_class.tokenizer.pad_token_id
                 processing_class.pad_token_id = pad_token_id
                 processing_class.eos_token_id = processing_class.tokenizer.eos_token_id
                 if "Qwen" in model_id or "Qwen2.5-VL" in model_id:
+                    processing_class.image_processor.max_pixels = max_pixels
+                    processing_class.image_processor.min_pixels = min_pixels
+            elif "Qwen2.5-Omni" in model_id:  # 添加 Omni 处理器
+                processing_class = Qwen2_5OmniProcessor.from_pretrained(model_id)
+                pad_token_id = processing_class.tokenizer.pad_token_id
+                processing_class.pad_token_id = pad_token_id
+                processing_class.eos_token_id = processing_class.tokenizer.eos_token_id
+                # Omni 处理器的特殊设置
+                if hasattr(processing_class, "image_processor"):
                     processing_class.image_processor.max_pixels = max_pixels
                     processing_class.image_processor.min_pixels = min_pixels
             else:
@@ -398,48 +414,71 @@ class Qwen2VLGRPOTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-    
         
-
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-
-                
         
         input_copy = copy.deepcopy(inputs[0]['prompt'])
-        
         input_copy = self.remove_none_from_data(input_copy)
         
+        # print(f"Is Omni model: {is_omni_model}")
         if inputs[0]['data_type'] == 'image':
-            input_copy[0]['content'][0]['image'] = os.getcwd() + "/Video-R1-data" + inputs[0]['path'][1:] 
+            input_copy[0]['content'][0]['image'] = "/" + inputs[0]['path'][1:]
         elif inputs[0]['data_type'] == 'video':
-            input_copy[0]['content'][0]['video'] = os.getcwd() + "/Video-R1-data" + inputs[0]['path'][1:] 
-            
-        try:
-            image_inputs, video_inputs, video_kwargs = process_vision_info(input_copy, return_video_kwargs=True)
-        except Exception as e:
-            print(f"process_vision_info error, using fixed data, {e}")
-            if inputs[0]['data_type'] == 'image':
-                input_copy[0]['content'][0]['image'] = os.getcwd() + "/Video-R1-data" + '/Math/Multimath-300k/17ff4c7d14c388134de02381b1fc2824.png'
-            elif inputs[0]['data_type'] == 'video':
-                input_copy[0]['content'][0]['video'] = os.getcwd() + "/Video-R1-data" + '/LLaVA-Video-178K/liwei_youtube_videos/videos/youtube_video_2024/ytb_7nRmsEw7nsE.mp4'
-                
-            image_inputs, video_inputs, video_kwargs = process_vision_info(input_copy, return_video_kwargs=True)
-        
-        
-        prompt_inputs = self.processing_class(
-            text=copy.deepcopy(prompts_text),
-            images=image_inputs,
-            videos=video_inputs,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=False,
-        )
-        
-        
-        prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            input_copy[0]['content'][0]['video'] = "/" + inputs[0]['path'][1:]
+        elif inputs[0]['data_type'] == 'audio':
+            input_copy[0]['content'][0]['audio'] = "/" + inputs[0]['path'][1:]
 
+        # 检测是否为 Omni 模型
+        is_omni_model = self.is_omni_model        
+        # Omni 模型的输入处理
+        if is_omni_model:
+            # 使用官方推荐的方式处理输入
+
+            # 1. 应用标准聊天模板
+            text = self.processing_class.apply_chat_template(
+                input_copy, 
+                add_generation_prompt=True, 
+                tokenize=False
+            )
+            
+            # 2. 处理多模态数据
+            audio_inputs, image_inputs, video_inputs = process_mm_info(
+                input_copy, 
+                use_audio_in_video=self.use_audio_in_video
+            )
+            
+            # 3. 使用处理器整合数据
+            prompt_inputs = self.processing_class(
+                text=text,
+                audios=audio_inputs,
+                images=image_inputs,
+                videos=video_inputs,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+                use_audio_in_video=self.use_audio_in_video
+            )
+        else:
+            try:
+                image_inputs, video_inputs, video_kwargs = process_vision_info(input_copy, return_video_kwargs=True)
+            except Exception as e:
+                print(f"process_vision_info error, using fixed data, {e}")
+                image_inputs, video_inputs, video_kwargs = process_vision_info(input_copy, return_video_kwargs=True)
+            
+            prompt_inputs = self.processing_class(
+                text=copy.deepcopy(prompts_text),
+                images=image_inputs,
+                videos=video_inputs,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
+        
+        # 共同的后续处理
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
 
         # fix prompt_inputs["input_ids"] length issue
         if self.max_prompt_length is not None:
@@ -456,15 +495,26 @@ class Qwen2VLGRPOTrainer(Trainer):
         if self.temporal and video_inputs:
             indices = torch.randperm(video_inputs[0].size(0))
             shuffled_video_inputs = [video_inputs[0][indices]]
-            shuffled_prompt_inputs = self.processing_class(
-                text=copy.deepcopy(prompts_text),
-                images=image_inputs,
-                videos=shuffled_video_inputs,
-                return_tensors="pt",
-                padding=True,
-                padding_side="left",
-                add_special_tokens=False,
-            )
+            if is_omni_model:
+                shuffled_prompt_inputs = self.processing_class(
+                    text=text,
+                    images=image_inputs,
+                    videos=shuffled_video_inputs,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left",
+                    add_special_tokens=False,
+                )
+            else:
+                shuffled_prompt_inputs = self.processing_class(
+                    text=copy.deepcopy(prompts_text),
+                    images=image_inputs,
+                    videos=shuffled_video_inputs,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left",
+                    add_special_tokens=False,
+                )
             shuffled_prompt_inputs = super()._prepare_inputs(shuffled_prompt_inputs)
             shuffled_prompt_ids, shuffled_prompt_mask = shuffled_prompt_inputs["input_ids"], shuffled_prompt_inputs["attention_mask"]
             if self.max_prompt_length is not None:
@@ -472,28 +522,68 @@ class Qwen2VLGRPOTrainer(Trainer):
                 shuffled_prompt_mask = shuffled_prompt_mask[:, -self.max_prompt_length :]
         
         
-        # Generate completions
+        # 修改生成代码部分
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
-            prompt_length = prompt_ids.size(1)
-            prompt_ids = prompt_completion_ids[:, :prompt_length]
-            completion_ids = prompt_completion_ids[:, prompt_length:]
-            prompt_mask = prompt_mask.repeat_interleave(self.num_generations, dim=0)
+            is_omni_model = self.is_omni_model
             
-            if self.temporal:
+            # 获取模型的数据类型
+            model_dtype = next(unwrapped_model.parameters()).dtype            
+            # 确保所有输入张量的数据类型一致
+            for key, value in prompt_inputs.items():
+                if isinstance(value, torch.Tensor):
+                    prompt_inputs[key] = value.to(dtype=model_dtype)
+                    
+            if is_omni_model:
+                # 检查是否包含音频视频
+                has_audio = 'audio_inputs' in locals() and audio_inputs is not None
+                has_video = 'video_inputs' in locals() and video_inputs is not None
                 
-                if video_inputs:
-            
+                generation_output = unwrapped_model.generate(
+                    **prompt_inputs, 
+                    generation_config=self.generation_config,
+                    use_audio_in_video=has_video and self.use_audio_in_video,
+                    return_audio=False  # 确保只返回文本，不返回音频
+                )
+                
+                # 处理返回值
+                if isinstance(generation_output, tuple) and len(generation_output) == 2:
+                    prompt_completion_ids, _ = generation_output  # 忽略音频输出
+                else:
+                    prompt_completion_ids = generation_output
+                    
+                # 处理一致性以用于后续操作
+                prompt_length = prompt_inputs["input_ids"].size(1)
+                prompt_ids = prompt_completion_ids[:, :prompt_length]
+                completion_ids = prompt_completion_ids[:, prompt_length:]
+                prompt_mask = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
+                
+                # 时序性处理
+                if self.temporal and has_video:
+                    # 实现时序性处理，类似现有的 video_inputs 处理
+                    # ... 这部分与现有代码类似，但需要针对 Omni 模型适配
                     shuffled_prompt_completion_ids = unwrapped_model.generate(**shuffled_prompt_inputs, generation_config=self.shuffled_generation_config)
                     shuffled_prompt_length = shuffled_prompt_ids.size(1)
                     shuffled_prompt_ids = shuffled_prompt_completion_ids[:, :shuffled_prompt_length]
                     shuffled_completion_ids = shuffled_prompt_completion_ids[:, shuffled_prompt_length:]
                     shuffled_prompt_mask = prompt_mask.repeat_interleave(self.shuffled_num_generations, dim=0)
                     
-                else:
-                    
-                    shuffled_prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.dummy_generation_config)
-
+            else:
+                # 原有的生成逻辑
+                prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
+                prompt_length = prompt_ids.size(1)
+                prompt_ids = prompt_completion_ids[:, :prompt_length]
+                completion_ids = prompt_completion_ids[:, prompt_length:]
+                prompt_mask = prompt_mask.repeat_interleave(self.num_generations, dim=0)
+                
+                if self.temporal:
+                    if video_inputs:
+                        shuffled_prompt_completion_ids = unwrapped_model.generate(**shuffled_prompt_inputs, generation_config=self.shuffled_generation_config)
+                        shuffled_prompt_length = shuffled_prompt_ids.size(1)
+                        shuffled_prompt_ids = shuffled_prompt_completion_ids[:, :shuffled_prompt_length]
+                        shuffled_completion_ids = shuffled_prompt_completion_ids[:, shuffled_prompt_length:]
+                        shuffled_prompt_mask = prompt_mask.repeat_interleave(self.shuffled_num_generations, dim=0)
+                    else:
+                        shuffled_prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.dummy_generation_config)
         
         print('path:', input_copy[0]['content'][0][inputs[0]['data_type']])   
         print('problem_id:', inputs[0]['problem_id'])       
@@ -530,9 +620,7 @@ class Qwen2VLGRPOTrainer(Trainer):
             prompt_inputs["pixel_values_videos"] = prompt_inputs["pixel_values_videos"].repeat(len(prompt_completion_ids), 1)
             prompt_inputs["video_grid_thw"] = prompt_inputs["video_grid_thw"].repeat(len(prompt_completion_ids), 1)
             if 'second_per_grid_ts' in prompt_inputs:
-                del prompt_inputs["second_per_grid_ts"]
-                # prompt_inputs["second_per_grid_ts"] = torch.tensor(prompt_inputs["second_per_grid_ts"]).repeat(len(prompt_completion_ids), 1)
-        
+                del prompt_inputs["second_per_grid_ts"]        
         
         
         
@@ -784,3 +872,47 @@ class Qwen2VLGRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+
+class Qwen2_5OmniGRPOTrainer(Qwen2VLGRPOTrainer):
+    """专门用于 Qwen2.5-Omni 模型的 GRPO 训练器"""
+    
+    def __init__(
+        self,
+        model: Union[str, PreTrainedModel],
+        reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        args: GRPOConfig = None,
+        script_args = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
+        processing_class: Optional[PreTrainedTokenizerBase] = None,
+        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        peft_config: Optional["PeftConfig"] = None,
+        max_pixels: Optional[int] = 12845056,
+        min_pixels: Optional[int] = 3136,
+        attn_implementation: str = "flash_attention_2",
+        use_audio_in_video: bool = True,
+        enable_audio_output: bool = False,
+        is_omni_model: bool = False,
+    ):
+        self.use_audio_in_video = use_audio_in_video
+        self.enable_audio_output = enable_audio_output
+        self.is_omni_model = is_omni_model
+        super().__init__(
+            model=model,
+            reward_funcs=reward_funcs,
+            args=args,
+            script_args=script_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=processing_class,
+            reward_processing_classes=reward_processing_classes,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            peft_config=peft_config,
+            max_pixels=max_pixels,
+            min_pixels=min_pixels,
+            attn_implementation=attn_implementation,
+        )
