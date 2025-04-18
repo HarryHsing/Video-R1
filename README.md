@@ -45,6 +45,14 @@ Video-R1 significantly outperforms previous models across most benchmarks. Notab
 
 This highlights the necessity of explicit reasoning capability in solving video tasks, and confirms the effectiveness of reinforcement learning for video tasks.
 
+
+<div align="center">
+  <img src="./images/frames.png" alt="Descriptive alt text" width="85%">
+</div>
+
+Besides, although the model is trained using only 16 frames, we find that evaluating on more frames (e.g., 64) generally leads to better performance, particularly on benchmarks with longer videos. These results indicate the importance of training models to reason over more frames.
+
+
 ## 🧠 Aha Moment in Video Reasoning
 
 One of the most intriguing outcomes of reinforcement learning in Video-R1 is the emergence of self-reflection reasoning behaviors, commonly referred to as “aha moments”. Some examples are as follows.
@@ -52,6 +60,7 @@ One of the most intriguing outcomes of reinforcement learning in Video-R1 is the
 <img src="./images/demo1.png" style="zoom:80%;" />
 
 <img src="./images/demo2.png" style="zoom:80%;" />
+
 
 ## 📈 RL Training Curves
 
@@ -118,7 +127,7 @@ bash ./src/scripts/run_sft_video.sh
 ```
 If you want to skip the SFT process, we also provide one of our SFT models at [🤗Qwen2.5-VL-SFT](https://huggingface.co/Video-R1/Qwen2.5-VL-7B-COT-SFT). 
 
-This is followed by RL training on the Video-R1-260k dataset to produce the final Video-R1 model. Due to current computational resource limitations, we train the model for only 1k RL steps.  
+This is followed by RL training on the Video-R1-260k dataset to produce the final Video-R1 model. Due to current computational resource limitations, we train the model for only 1.2k RL steps.  
 
 The script for training the obtained Qwen2.5-VL-7B-SFT model with T-GRPO or GRPO is as follows
 
@@ -138,7 +147,7 @@ Please keep per_device_train_batch_size=1 as in previous work r1-v
 
 ## 🔮 Inference & Evaluation
 
-During inference, we increase the max frame resolution to 256 × 28 × 28 and max frames to 16/32 to enhance performance. You can easily set this in `src/qwen-vl-utils`
+During inference, we increase the max frame resolution to 256 × 28 × 28 and max frames to 16/32/64 to enhance performance. You can easily set this in `src/qwen-vl-utils`
 
 For all evaluations, we follow the decoding configuration used in the official Qwen2.5-VL demo, with top\_p = 0.001 and temperature = 0.01. Setting large top_p may encounter messy output when inference.
 
