@@ -7,9 +7,9 @@ export DEBUG_MODE="true"
 export LOG_PATH="./vllm_run.txt"
 
 
-QWEN_PATH='SFT Model Path'
-HF_DATASET="./Video-R1-data/Video-R1-260k.json"
-OUTPUT_DIR="./log/Qwen2.5-VL-7B-Video-GRPO"
+QWEN_PATH=/research/d1/gds/zhxing/projects_r1/models/Qwen2.5-VL-7B-COT-SFT
+HF_DATASET=/research/d1/gds/zhxing/projects_r1/datasets/AV-TAU-R1/final_train_qa_r1.json
+OUTPUT_DIR=./log/VLLM-Qwen2.5-VL-7B-Video-GRPO
 if [ ! -d "$OUTPUT_DIR" ]; then
  mkdir -p "$OUTPUT_DIR"
 fi

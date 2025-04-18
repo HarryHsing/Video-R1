@@ -4,5 +4,5 @@ from .vllm_grpo_trainer_modified import Qwen2VLGRPOVLLMTrainerModified
 __all__ = [
     "Qwen2VLGRPOTrainer", 
     "Qwen2VLGRPOVLLMTrainerModified",
-    "Qwen2_5OmniGRPOTrainer"
+    "Qwen2_5OmniGRPOTrainer",
 ]

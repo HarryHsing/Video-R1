@@ -1,25 +1,27 @@
-# import soundfile as sf
+import soundfile as sf
 
-from transformers import Qwen2_5OmniModel, Qwen2_5OmniProcessor
+from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
 from qwen_omni_utils import process_mm_info
 
 # default: Load the model on the available device(s)
-model = Qwen2_5OmniModel.from_pretrained("../models/Qwen2.5-Omni-7B", torch_dtype="auto", device_map="auto")
+# model = Qwen2_5OmniModel.from_pretrained("../models/Qwen2.5-Omni-7B", torch_dtype="auto", device_map="auto")
 
 # We recommend enabling flash_attention_2 for better acceleration and memory saving.
-# model = Qwen2_5OmniModel.from_pretrained(
-#     "Qwen/Qwen2.5-Omni-7B",
-#     torch_dtype="auto",
-#     device_map="auto",
-#     attn_implementation="flash_attention_2",
-# )
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
+    "../models/Qwen2.5-Omni-7B",
+    torch_dtype="auto",
+    device_map="auto",
+    attn_implementation="flash_attention_2",
+)
 
 processor = Qwen2_5OmniProcessor.from_pretrained("../models/Qwen2.5-Omni-7B")
 
 conversation = [
     {
         "role": "system",
-        "content": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.",
+        "content": [
+            {"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}
+        ],
     },
     {
         "role": "user",
@@ -35,7 +37,7 @@ USE_AUDIO_IN_VIDEO = True
 # Preparation for inference
 text = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
 audios, images, videos = process_mm_info(conversation, use_audio_in_video=USE_AUDIO_IN_VIDEO)
-inputs = processor(text=text, audios=audios, images=images, videos=videos, return_tensors="pt", padding=True, use_audio_in_video=USE_AUDIO_IN_VIDEO)
+inputs = processor(text=text, audio=audios, images=images, videos=videos, return_tensors="pt", padding=True, use_audio_in_video=USE_AUDIO_IN_VIDEO)
 inputs = inputs.to(model.device).to(model.dtype)
 
 # Inference: Generation of the output text and audio

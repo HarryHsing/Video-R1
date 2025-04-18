@@ -469,10 +469,10 @@ class Qwen2VLGRPOVLLMTrainerModified(Trainer):
         
         data_type = inputs[0]['data_type']
         
-        if data_type == 'image':
-            input_copy[0]['content'][0]['image'] = os.getcwd() + "/Video-R1-data" + inputs[0]['path'][1:] 
-        elif data_type == 'video':
-            input_copy[0]['content'][0]['video'] = os.getcwd() + "/Video-R1-data" + inputs[0]['path'][1:] 
+        if inputs[0]['data_type'] == 'image':
+            input_copy[0]['content'][0]['image'] = "/" + inputs[0]['path'][1:]
+        elif inputs[0]['data_type'] == 'video':
+            input_copy[0]['content'][0]['video'] = "/" + inputs[0]['path'][1:]
         
         
         image_inputs, video_inputs, video_kwargs = process_vision_info(input_copy, return_video_kwargs=True)
