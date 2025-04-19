@@ -20,5 +20,5 @@ def extract_zip_files(root_dir):
                     print(f"Failed to extract {zip_path}: {e}")
 
 if __name__ == '__main__':
-    root_directory = "./src/r1-v/Video-R1-data"
+    root_directory = "../datasets/Video-R1-data"
     extract_zip_files(root_directory)
