@@ -15,5 +15,17 @@ pip install nltk
 pip install rouge_score
 pip install deepspeed
 
-# fix transformers version
-# pip install git+https://github.com/huggingface/transformers.git@336dc69d63d56f232a183a3e7f52790429b871ef
+# latest version of transfoerms, otherwise Qwen2.5 Omni may not be included
+pip uninstall transformers
+pip install git+https://github.com/huggingface/transformers
+pip install accelerate
+
+# qwen video extraction setting, e.g., max frames, resolutions
+# Use the [decord] feature to improve speed
+cd src/qwen-vl-utils
+pip install -e .[decord]
+cd ../../
+
+cd src/qwen-omni-utils
+pip install -e .[decord]
+cd ../../
