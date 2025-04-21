@@ -529,28 +529,28 @@ class Qwen2VLGRPOTrainer(Trainer):
         
         
         
-        try:
-            per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
-            per_token_logps = per_token_logps[:, prompt_length - 1 :]
-        except Exception as e:
-            print(f"Error computing per_token_logps: {e}. Setting output to zero.")
-            # per_token_logps = torch.tensor(0.0, device=prompt_completion_ids.device, requires_grad=True)
-            per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
+        # try:
+        per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
+        per_token_logps = per_token_logps[:, prompt_length - 1 :]
+        # except Exception as e:
+        #     print(f"Error computing per_token_logps: {e}. Setting output to zero.")
+        #     # per_token_logps = torch.tensor(0.0, device=prompt_completion_ids.device, requires_grad=True)
+        #     per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
         
         with torch.inference_mode():
-            try:
-                if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps(self.ref_model, prompt_completion_ids, **prompt_inputs)
-                else:
-                    with self.accelerator.unwrap_model(model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
-                ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
-            except Exception as e:
-                print(f"Error computing ref_per_token_logps: {e}. Setting output to zero.")
-                # ref_per_token_logps = torch.tensor(0.0, device=prompt_completion_ids.device)
+            # try:
+            if self.ref_model is not None:
+                ref_per_token_logps = self._get_per_token_logps(self.ref_model, prompt_completion_ids, **prompt_inputs)
+            else:
                 with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
-                ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
+                    ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
+            ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
+            # except Exception as e:
+            #     print(f"Error computing ref_per_token_logps: {e}. Setting output to zero.")
+            #     # ref_per_token_logps = torch.tensor(0.0, device=prompt_completion_ids.device)
+            #     with self.accelerator.unwrap_model(model).disable_adapter():
+            #         ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
+            #     ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
 
         # Compute the KL divergence between the model and the reference model
         
@@ -646,8 +646,6 @@ class Qwen2VLGRPOTrainer(Trainer):
                     if 320 <= lenth_list[idx] <= 512:
                         rewards[idx] += 0.2
         
-        print(rewards)
-        print(completion_mask.sum(1))
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -1041,9 +1039,9 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
         input_copy = self.remove_none_from_data(input_copy)
         
         if inputs[0]['data_type'] == 'image':
-            input_copy[0]['content'][0]['image'] = "/" + inputs[0]['path'][1:]
+            input_copy[0]['content'][0]['image'] = "/mnt/petrelfs/huxiaowei/projects/datasets/AV-TAU-R1/" + inputs[0]['path'][0:]
         elif inputs[0]['data_type'] == 'video':
-            input_copy[0]['content'][0]['video'] = "/" + inputs[0]['path'][1:]
+            input_copy[0]['content'][0]['video'] = "/mnt/petrelfs/huxiaowei/projects/datasets/AV-TAU-R1/" + inputs[0]['path'][0:]
             
         # 使用qwen_omni_utils中的process_mm_info处理多模态输入
         audios, images, videos = process_mm_info(input_copy, use_audio_in_video=self.use_audio_in_video)
@@ -1063,7 +1061,7 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
             videos=videos,
             return_tensors="pt",
             padding=True,
-            use_audio_in_video=False #self.use_audio_in_video
+            use_audio_in_video=self.use_audio_in_video
         )
         
         
@@ -1075,7 +1073,20 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
 
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
-        
+        if self.temporal and videos:
+            shuffle_idx = torch.randperm(videos[0].size(0))
+            shuffled_videos = [videos[0][shuffle_idx]]
+            shuffled_prompt_inputs = self.processing_class(
+                text=text,
+                audio=audios,
+                images=images,
+                videos=shuffled_videos,
+                return_tensors="pt",
+                padding=True,
+                use_audio_in_video=self.use_audio_in_video,
+            )
+            shuffled_prompt_inputs = super()._prepare_inputs(shuffled_prompt_inputs)
+
         # Generate completions
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             # 为Qwen2.5Omni模型生成文本和音频
@@ -1092,13 +1103,11 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
             prompt_mask = prompt_mask.repeat_interleave(self.num_generations, dim=0)
             
             if self.temporal and videos:
-                # 需要实现视频的时序打乱逻辑
-                # 这里简化为使用dummy_generation_config
                 shuffled_prompt_completion_ids = unwrapped_model.generate(
-                    **prompt_inputs, 
-                    generation_config=self.dummy_generation_config,
+                    **shuffled_prompt_inputs,
+                    generation_config=self.shuffled_generation_config,
                     use_audio_in_video=self.use_audio_in_video,
-                    return_audio=False
+                    return_audio=False,
                 )
 
         print('path:', input_copy[0]['content'][0][inputs[0]['data_type']])   
@@ -1119,15 +1128,15 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
                 
 
         # 打印所有可用的键和形状
-        print("======================= TENSOR SHAPES =======================")
-        for key, val in prompt_inputs.items():
-            if isinstance(val, torch.Tensor):
-                print(f"1-Key: {key}, Shape: {val.shape}, Type: {val.dtype}")
-            else:
-                print(f"1-Key: {key}, Type: {type(val)}")
+        # print("======================= TENSOR SHAPES =======================")
+        # for key, val in prompt_inputs.items():
+        #     if isinstance(val, torch.Tensor):
+        #         print(f"1-Key: {key}, Shape: {val.shape}, Type: {val.dtype}")
+        #     else:
+        #         print(f"1-Key: {key}, Type: {type(val)}")
 
   
-        print(f"P-Key: ", prompt_completion_ids.shape, prompt_completion_ids.dtype, prompt_completion_ids)
+        # print(f"P-Key: ", prompt_completion_ids.shape, prompt_completion_ids.dtype, prompt_completion_ids)
 
 
         if inputs[0]['data_type'] == 'image':
@@ -1155,35 +1164,36 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
                     prompt_inputs["feature_attention_mask"] = prompt_inputs["feature_attention_mask"].repeat_interleave(repeat_factor, dim=0)
         # import pdb; pdb.set_trace()
 
+
         # 打印所有可用的键和形状
-        print("======================= TENSOR SHAPES =======================")
-        for key, val in prompt_inputs.items():
-            if isinstance(val, torch.Tensor):
-                print(f"2-Key: {key}, Shape: {val.shape}, Type: {val.dtype}")
-            else:
-                print(f"2-Key: {key}, Type: {type(val)}")    
+        # print("======================= TENSOR SHAPES =======================")
+        # for key, val in prompt_inputs.items():
+        #     if isinstance(val, torch.Tensor):
+        #         print(f"2-Key: {key}, Shape: {val.shape}, Type: {val.dtype}")
+        #     else:
+        #         print(f"2-Key: {key}, Type: {type(val)}")    
 
         # 计算令牌概率
-        try:
-            per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
-            per_token_logps = per_token_logps[:, prompt_length - 1 :]
-        except Exception as e:
-            print(f"Error computing per_token_logps: {e}. Setting output to zero.")
-            per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
+        # try:
+        per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
+        per_token_logps = per_token_logps[:, prompt_length - 1 :]
+        # except Exception as e:
+        #     print(f"Error computing per_token_logps: {e}. Setting output to zero.")
+        #     per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
         
         with torch.inference_mode():
-            try:
-                if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps(self.ref_model, prompt_completion_ids, **prompt_inputs)
-                else:
-                    with self.accelerator.unwrap_model(model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
-                ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
-            except Exception as e:
-                print(f"Error computing ref_per_token_logps: {e}. Setting output to zero。")
+            # try:
+            if self.ref_model is not None:
+                ref_per_token_logps = self._get_per_token_logps(self.ref_model, prompt_completion_ids, **prompt_inputs)
+            else:
                 with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
-                ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
+                    ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids, **prompt_inputs)
+            ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
+            # except Exception as e:
+            #     print(f"Error computing ref_per_token_logps: {e}. Setting output to zero。")
+            #     with self.accelerator.unwrap_model(model).disable_adapter():
+            #         ref_per_token_logps = self._get_per_token_logps(model, prompt_completion_ids)
+            #     ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
 
         # 计算KL散度
         x_clamped = torch.clamp(ref_per_token_logps - per_token_logps, min=-10, max=10)
@@ -1206,7 +1216,52 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
                     reward_kwargs[key].extend([example[key]] * self.num_generations)
             output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
             rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
-        
+
+        # === PATCH 4 BEGIN: temporal reward compare ===
+        if self.temporal and videos:
+            # 1. 解码“打乱帧”回答
+            shuffled_completions = self.processing_class.batch_decode(
+                shuffled_prompt_completion_ids[:, prompt_length:],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            if is_conversational(inputs[0]):
+                shuffled_completions = [[{"role": "assistant", "content": c}] for c in shuffled_completions]
+
+            # 2. 构造 prompts 和额外列，与主路径保持一致
+            shuffled_prompts = [p for p in prompts for _ in range(self.shuffled_num_generations)]
+            shuffled_reward_kwargs = {k: [] for k in inputs[0].keys()
+                                    if k not in ["prompt", "completion"]}
+            for k in shuffled_reward_kwargs:
+                for ex in inputs:
+                    shuffled_reward_kwargs[k].extend([ex[k]] * self.shuffled_num_generations)
+
+            # 3. 重新跑 reward model
+            shuffled_rewards_per_func = torch.zeros_like(
+                rewards_per_func[: self.shuffled_num_generations]
+            )
+            for i, (reward_func, _) in enumerate(zip(self.reward_funcs, self.reward_processing_classes)):
+                out = reward_func(
+                    prompts      = shuffled_prompts,
+                    completions  = shuffled_completions,
+                    **shuffled_reward_kwargs,          # ★ 把缺失的字段补上
+                )
+                shuffled_rewards_per_func[:, i] = torch.as_tensor(out, device=device)
+
+            # 4. 比较原视频 vs. 打乱视频
+            acc_mean          = rewards_per_func[:, 0].mean()
+            shuffled_acc_mean = shuffled_rewards_per_func[:, 0].mean()
+
+            if acc_mean >= 0.8 * shuffled_acc_mean:
+                temporal_rewards = torch.tensor([1.0], device=device)
+                mask_good = rewards_per_func[:, 0] > 0.1
+                rewards_per_func[mask_good, 0] += 0.3
+            else:
+                temporal_rewards = torch.tensor([0.0], device=device)
+        # === PATCH 4 END ===
+
+
+
         # 总奖励
         rewards = rewards_per_func.sum(dim=1)
     
@@ -1265,6 +1320,13 @@ class Qwen2_5OmniGRPOTrainer(Trainer):
 
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+
+        # === PATCH 5 BEGIN: log temporal metric ===
+        if self.temporal and videos:
+            self._metrics["temporal_rewards"].append(
+                self.accelerator.gather_for_metrics(temporal_rewards).mean().item()
+            )
+        # === PATCH 5 END ===
   
         return loss
     
