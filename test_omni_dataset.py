@@ -7,6 +7,7 @@ dataset = load_dataset("m-a-p/OmniInstruct_v1")
 train_dataset = load_dataset("m-a-p/OmniInstruct_v1", split="train")
 
 print(train_dataset)
+print(train_dataset[0])
 
 
 # Log contents
